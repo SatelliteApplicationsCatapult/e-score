@@ -1,0 +1,91 @@
+// // **************************************************************************************** //
+// // ************************** E Global Emissions Score ************************************ //
+// // **************************************************************************************** //
+
+// Important! Manually input dates to define dateRangeStart and dateRangeEnd, ensuring they do not fall 
+// between 2022-07-26 and 2022-08-31, due to a provider outage during this period. The dates input 
+// should correspond exactly to your second (later) monitoring period, or a close time period of
+// equivalent length if your second monitoring period falls within the prohibited dates.
+
+//         *** FUNCTIONS ***
+//Reclassify the different emissions
+
+
+// Function to reclassify emissions
+var reclassify = function(value, thresholds, classes) {
+  var classValue = ee.Image(); // Initialize an empty image 
+  for (var i = 0; i < thresholds.length; i++) {
+    if (i === 0) {
+      classValue = value.lte(thresholds[i]).multiply(0);
+    } else {
+      classValue = classValue.where(value.gt(thresholds[i - 1]).and(value.lte(thresholds[i])), 0.5);
+    }
+  }
+  return classValue.where(value.gt(thresholds[thresholds.length - 1]), 1).rename('reclassified');
+};
+
+
+
+//////////////////////////////////////////////////////////
+//         *** Definition of emissions classes and thresholds ***
+// 
+var emissionsClasses = ['low', 'mid', 'high'];
+var sulphur_th = [0.001, 0.01];
+var methane_th = [1800, 2000];
+var nitrogen_th = [0.0002, 0.0005];
+var carbon_th = [0.01, 0.05];
+
+
+// Compute emission within ald
+var computeMeanEmission = function(collection) {
+  var meanEmission = collection.median();
+  return meanEmission.rename('mean_emission');
+};
+
+//////////////////////////////////////////////////
+//         *** DATES ***
+
+
+var dateRangeStart = '2022-09-01'; // add your number of weeks (default 4) to the date to the left to calculate the date below
+var dateRangeEnd = '2022-10-01'; // check neither date falls within prohibited period
+
+///////////////////////////////////////////////////////////
+
+
+// Process each Polutant
+var pollutants = [
+  { name: 'S5P CH4_methane', collectionID: 'COPERNICUS/S5P/OFFL/L3_CH4', band: 'CH4_column_volume_mixing_ratio_dry_air_bias_corrected', thresholds: methane_th },
+  { name: 'S5P SO2_sulphur', collectionID: 'COPERNICUS/S5P/OFFL/L3_SO2', band: 'SO2_column_number_density', thresholds: sulphur_th },
+  { name: 'S5P N02_nitrogen', collectionID: 'COPERNICUS/S5P/OFFL/L3_NO2', band: 'tropospheric_NO2_column_number_density', thresholds: nitrogen_th },
+  { name: 'S5P CO_carbon', collectionID: 'COPERNICUS/S5P/OFFL/L3_CO', band: 'CO_column_number_density', thresholds: carbon_th }
+];
+
+
+// Process each Polutant
+pollutants.forEach(function(pollutant) {
+  var collection = ee.ImageCollection(pollutant.collectionID)
+                    .select(pollutant.band)
+                    .filterDate(dateRangeStart, dateRangeEnd);
+
+  collection = collection.map(function(image) {
+    return image.clip(ald);
+  });
+
+  var meanEmission = computeMeanEmission(collection);
+ // print('Mean ' + pollutant.name + ' emission over site:', meanEmission);
+
+  // Reclassify emissions
+  var reclassifiedEmission = reclassify(meanEmission, pollutant.thresholds, emissionsClasses);
+  Map.addLayer(reclassifiedEmission, {min: 0, max: emissionsClasses.length, palette: ['green', 'yellow', 'red']}, 'Reclassified ' + pollutant.name, false);
+
+  // Add the mean emission layer to the map
+  Map.addLayer(meanEmission, {min: pollutant.thresholds[0], max: pollutant.thresholds[pollutant.thresholds.length - 1], palette: ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']}, 'Median ' + pollutant.name + ' emission', false);
+
+  // Print the mean emission value over the site
+  var meanValue = meanEmission.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: ald,
+    scale: 1000  //1km
+  });
+  print('Mean ' + pollutant.name + ' emission over site:', meanValue);
+});
